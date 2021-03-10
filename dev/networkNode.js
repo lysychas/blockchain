@@ -24,12 +24,36 @@ app.get('/blockchain', function (req, res) {
 
 // create a new transaction
 app.post('/transaction', function (req, res) {
-  const blockIndex = bitcoin.createNewTransaction(
+  const newTransaction = req.body;
+  const blockIndex = bitcoin.addTransactionToPendingTransactions(
+    newTransaction
+  );
+  res.json({ note: `Transaction will be added in block ${blockIndex}.` });
+});
+
+// broadcast transaction to all existing connected network nodes
+app.post('/transaction/broadcast', function (req, res) {
+  const newTransaction = bitcoin.createNewTransaction(
     req.body.amount,
     req.body.sender,
     req.body.recipient
   );
-  res.json({ note: `Transaction will be added in block ${blockIndex}.` });
+  bitcoin.addTransactionToPendingTransactions(newTransaction);
+
+  const requestPromises = [];
+  bitcoin.networkNodes.forEach((networkNodeUrl) => {
+    const requestOptions = {
+      uri: networkNodeUrl + '/transaction',
+      method: 'POST',
+      body: newTransaction,
+      json: true,
+    };
+    requestPromises.push(rp(requestOptions));
+  });
+
+  Promise.all(requestPromises).then((data) => {
+    res.json({ note: 'Transaction created and broadcast successfully.' });
+  });
 });
 
 // mine a block
@@ -49,25 +73,75 @@ app.get('/mine', function (req, res) {
     currentBlockData,
     nonce
   );
-  bitcoin.createNewTransaction(12.5, '00', nodeAddress); // miner reward, sender always '00' to indictate mine reward, 12.5 is always a reward for successful Real-Life bitcoin mine
-
   const newBlock = bitcoin.createNewBlock(nonce, previousBlockHash, blockHash);
 
-  res.json({ note: 'New block mined successfully!.', block: newBlock });
+  const requestPromises = [];
+  bitcoin.networkNodes.forEach((networkNodeUrl) => {
+    const requestOptions = {
+      uri: networkNodeUrl + '/receive-new-block',
+      method: 'POST',
+      body: { newBlock: newBlock },
+      json: true,
+    };
+    requestPromises.push(rp(requestOptions));
+  });
+
+  // mining rewards go into the next block, not the one we mined, It's how bitcoin does it as well (BEST PRACTICES)
+  Promise.all(requestPromises)
+    .then((data) => {
+      // miner reward, sender always '00' to indictate mine reward, 12.5 is always a reward for successful Real-Life bitcoin mine
+      const requestOptions = {
+        uri: bitcoin.currentNodeUrl + '/transaction/broadcast',
+        method: 'POST',
+        body: {
+          amount: 12.5,
+          sender: '00',
+          recipient: nodeAddress,
+        },
+        json: true,
+      };
+      return rp(requestOptions);
+    })
+    .then((data) => {
+      res.json({
+        note: 'New block mined & broadcast successfully',
+        block: newBlock,
+      });
+    });
 });
 
-const nodeNotAlreadyPresent = (newNodeUrl) => {
-  return bitcoin.networkNodes.indexOf(newNodeUrl) === -1;
-};
+// receive new block
+app.post('/receive-new-block', function (req, res) {
+  const newBlock = req.body.newBlock;
+  const lastBlock = bitcoin.getLastBlock();
 
-const notCurrentNode = (newNodeUrl) => {
-  return bitcoin.currentNodeUrl !== newNodeUrl;
-};
+  const correctHash = lastBlock.hash === newBlock.previousBlockHash;
+  const correctIndex = lastBlock['index'] + 1 === newBlock['index'];
+
+  if (correctHash && correctIndex) {
+    bitcoin.chain.push(newBlock);
+    bitcoin.pendingTransactions = [];
+    res.json({
+      note: 'New block received and accepted.',
+      newBlock: newBlock,
+    });
+  } else {
+    res.json({
+      note: 'New block rejected.',
+      newBlock: newBlock,
+    });
+  }
+});
 
 // register a node and broadcast it in the network of existing nodes for them to also register (DO NOT BROADCAST ANYMORE TO AVOID INFINITE LOOP, ONLY ONCE)
 app.post('/register-and-broadcast-node', function (req, res) {
   const newNodeUrl = req.body.newNodeUrl; // pass in the url we want to register
-  if (nodeNotAlreadyPresent()) bitcoin.networkNodes.push(newNodeUrl); // check if this node already exists in the network
+
+  const nodeNotAlreadyPresent = bitcoin.networkNodes.indexOf(newNodeUrl) === -1;
+  const notCurrentNode = bitcoin.currentNodeUrl !== newNodeUrl;
+
+  if (nodeNotAlreadyPresent && notCurrentNode)
+    bitcoin.networkNodes.push(newNodeUrl); // check if this node already exists in the network
 
   const regNodesPromises = [];
   bitcoin.networkNodes.forEach((networkNodeUrl) => {
@@ -81,7 +155,7 @@ app.post('/register-and-broadcast-node', function (req, res) {
     regNodesPromises.push(rp(requestOptions)); // make a async request to each node
   });
 
-  Promise.all(regNodesPromises)
+  Promise.all(regNodesPromises) // running all requests from request array async
     .then((data) => {
       const bulkRegisterOptions = {
         uri: newNodeUrl + '/register-nodes-bulk',
@@ -98,20 +172,29 @@ app.post('/register-and-broadcast-node', function (req, res) {
     });
 });
 
-// register a node with the network
+// register a node with the network. For existing nodes
 app.post('/register-node', function (req, res) {
   const newNodeUrl = req.body.newNodeUrl;
-  if (nodeNotAlreadyPresent() && notCurrentNode())
+
+  const nodeNotAlreadyPresent = bitcoin.networkNodes.indexOf(newNodeUrl) === -1;
+  const notCurrentNode = bitcoin.currentNodeUrl !== newNodeUrl;
+
+  if (nodeNotAlreadyPresent && notCurrentNode)
     bitcoin.networkNodes.push(newNodeUrl);
 
   res.json({ note: 'New node registered successfully.' });
 });
 
-// register multiple nodes at once
+// register multiple nodes at once. For new node
 app.post('/register-nodes-bulk', function (req, res) {
   const allNetworkNodes = req.body.allNetworkNodes;
+
   allNetworkNodes.forEach((networkNodeUrl) => {
-    if (nodeNotAlreadyPresent() && notCurrentNode())
+    const nodeNotAlreadyPresent =
+      bitcoin.networkNodes.indexOf(networkNodeUrl) === -1;
+    const notCurrentNode = bitcoin.currentNodeUrl !== networkNodeUrl;
+
+    if (nodeNotAlreadyPresent && notCurrentNode)
       bitcoin.networkNodes.push(networkNodeUrl);
   });
 

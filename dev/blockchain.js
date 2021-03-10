@@ -49,10 +49,17 @@ Blockchain.prototype.createNewTransaction = function (
     recipient: recipient,
     transactionId: uuid().split('-').join(''), // replace dashes with empty space
   };
-  this.pendingTransactions.push(newTransaction); // our new transaction will be in the next created (mined) block
+
+  return newTransaction;
+};
+
+Blockchain.prototype.addTransactionToPendingTransactions = function (
+  transactionObj // newTransaction goes here
+) {
+  // our new transaction will be in the next created (mined) block
+  this.pendingTransactions.push(transactionObj);
 
   return this.getLastBlock()['index'] + 1;
-  // return newTransaction;
 };
 
 Blockchain.prototype.hashBlock = function (
