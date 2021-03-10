@@ -94,4 +94,50 @@ Blockchain.prototype.proofOfWork = function (
   return nonce;
 };
 
+// consensus - block validation, to make sure each node is properly in sync and no one is cheating
+Blockchain.prototype.chainIsValid = function (blockchain) {
+  let validChain = true;
+
+  for (var i = 1; i < blockchain.length; i++) {
+    const currentBlock = blockchain[i];
+    const prevBlock = blockchain[i - 1];
+
+    // if currentBlock's previousBlockHash is different from the previousBlock's hash, set flag to false
+    if (currentBlock['previousBlockHash'] !== prevBlock['hash'])
+      validChain = false;
+
+    const blockHash = this.hashBlock(
+      prevBlock['hash'],
+      {
+        transactions: currentBlock['transactions'],
+        index: currentBlock['index'],
+      },
+      currentBlock['nonce']
+    );
+
+    // proofOfWork check, valid block hashes must start with '0000...'
+    if (blockHash.substring(0, 4) !== '0000') validChain = false;
+
+    // console.log('previousBlockHash =>', prevBlock['hash']);
+    // console.log('currentBlockHash =>', currentBlock['hash']);
+  }
+
+  // genesis block check
+  const genesisBlock = blockchain[0];
+  const correctNonce = genesisBlock['nonce'] === 100;
+  const correctPreviousBlockHash = genesisBlock['previousBlockHash'] === '0';
+  const correctHash = genesisBlock['hash'] === '0';
+  const correctTransactions = genesisBlock['transactions'].length === 0;
+
+  if (
+    !correctNonce ||
+    !correctPreviousBlockHash ||
+    !correctHash ||
+    !correctTransactions
+  )
+    validChain = false;
+
+  return validChain;
+};
+
 module.exports = Blockchain;

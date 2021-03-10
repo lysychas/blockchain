@@ -201,6 +201,54 @@ app.post('/register-nodes-bulk', function (req, res) {
   res.json({ note: 'Bulk registration successful.' });
 });
 
+// consensus - synchronises nodes' chains by request, longest chain rule, used by bitcoin!
+app.get('/consensus', function (req, res) {
+  // get all nodes' blockchain objects
+  const requestPromises = [];
+  bitcoin.networkNodes.forEach((networkNodeUrl) => {
+    const requestOptions = {
+      uri: networkNodeUrl + '/blockchain',
+      method: 'GET',
+      json: true,
+    };
+    requestPromises.push(rp(requestOptions));
+  });
+
+  //iterate through all blockchain objects in blockchains array
+  Promise.all(requestPromises).then((blockchains) => {
+    const currentChainLength = bitcoin.chain.length;
+    let maxChainLength = currentChainLength;
+    let newLongestChain = null;
+    let newPendingTransactions = null;
+
+    // identify if one of the blockchains is longer than current blockchain
+    blockchains.forEach((blockchain) => {
+      if (blockchain.chain.length > maxChainLength) {
+        maxChainLength = blockchain.chain.length;
+        newLongestChain = blockchain.chain;
+        newPendingTransactions = blockchain.pendingTransactions;
+      }
+    });
+
+    if (
+      !newLongestChain ||
+      (newLongestChain && !bitcoin.chainIsValid(newLongestChain)) // if there is no new chain or if that chain is not valid, do not replace current chain we are on
+    ) {
+      res.json({
+        note: 'Current chain has not been replaced.',
+        chain: bitcoin.chain,
+      });
+    } else {
+      bitcoin.chain = newLongestChain;
+      bitcoin.pendingTransactions = newPendingTransactions;
+      res.json({
+        note: 'This chain has been replaced.',
+        chain: bitcoin.chain,
+      });
+    }
+  });
+});
+
 app.listen(port, function () {
   console.log(`Listening on port ${port}...`);
 });
